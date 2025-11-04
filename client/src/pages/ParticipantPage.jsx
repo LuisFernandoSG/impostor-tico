@@ -1,349 +1,217 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { Card } from '../components/Card.jsx';
-import { TextField } from '../components/TextField.jsx';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Button } from '../components/Button.jsx';
-import { Loader } from '../components/Loader.jsx';
+import { Card } from '../components/Card.jsx';
 import { EmptyState } from '../components/EmptyState.jsx';
+import { Loader } from '../components/Loader.jsx';
+import { TextField } from '../components/TextField.jsx';
 import { WishlistItem } from '../components/WishlistItem.jsx';
 import { useGroupsApi } from '../services/groups.js';
-import { useRealtimeGroup } from '../hooks/useRealtimeGroup.js';
-import {
-  getParticipantAccess,
-  rememberParticipantAccess,
-  rememberParticipantForGroup
-} from '../utils/storage.js';
-import { extractAsin, buildAmazonImageFromAsin } from '../utils/amazon.js';
+import { buildAmazonImageFromAsin, extractAsin } from '../utils/amazon.js';
 
 export const ParticipantPage = () => {
-  const { code = '', participantId = '' } = useParams();
-  const joinCode = code.toUpperCase();
+  const { code, participantId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-
-  const locationAccess = location.state?.accessCode;
-  const queryAccess = new URLSearchParams(location.search).get('access');
-  const storedAccess = useMemo(() => getParticipantAccess(participantId), [participantId]);
-  const initialAccessCode = locationAccess || queryAccess || storedAccess || '';
-
-  const { getParticipant, getAssignment, addWishlistItem, removeWishlistItem } = useGroupsApi();
-
-  const [accessCode, setAccessCode] = useState(initialAccessCode);
-  const [accessInput, setAccessInput] = useState(initialAccessCode);
-  const [needsAccess, setNeedsAccess] = useState(!initialAccessCode);
-  const [accessFeedback, setAccessFeedback] = useState(null);
+  const groupsApi = useGroupsApi();
 
   const [group, setGroup] = useState(null);
-  const [participant, setParticipant] = useState(null);
-  const [peers, setPeers] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
-
-  const [friendInfo, setFriendInfo] = useState(null);
-  const [friendStatus, setFriendStatus] = useState({ loading: false, message: null });
+  const [participant, setParticipant] = useState(location.state?.participant ?? null);
+  const [assignment, setAssignment] = useState(null);
+  const [status, setStatus] = useState('idle');
+  const [message, setMessage] = useState(null);
 
   const {
     register,
     handleSubmit,
     reset,
-    formState: { errors }
-  } = useForm({
-    defaultValues: { title: '', url: '', note: '' }
-  });
+    formState: { errors, isSubmitting }
+  } = useForm({ defaultValues: { title: '', url: '', note: '' } });
 
-  const [wishlistStatus, setWishlistStatus] = useState({ loading: false, message: null });
-
-  const loadParticipant = useCallback(
-    async (accessToUse) => {
-      const normalized = (accessToUse || accessCode || '').toUpperCase();
-      if (!normalized) return;
-      setIsLoading(true);
-      setAccessFeedback(null);
-      try {
-        const data = await getParticipant(joinCode, participantId, normalized);
-        setGroup(data.group);
-        setParticipant(data.participant);
-        setPeers(data.peers);
-        rememberParticipantAccess(participantId, normalized);
-        rememberParticipantForGroup(joinCode, participantId);
-        setAccessCode(normalized);
-        setAccessInput(normalized);
-        setNeedsAccess(false);
-      } catch (error) {
-        if (error.response?.status === 404) {
-          navigate('/404', { replace: true });
-          return;
-        }
-        if (error.response?.status === 403) {
-          setNeedsAccess(true);
-          setAccessFeedback('El código de acceso no es válido. Revisa el enlace que te compartieron.');
-          setGroup(null);
-          setParticipant(null);
-        } else {
-          setAccessFeedback(error.message || 'No pudimos cargar tu información.');
-        }
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [accessCode, getParticipant, joinCode, navigate, participantId]
-  );
+  const loadData = async () => {
+    setStatus('pending');
+    setMessage(null);
+    try {
+      const [groupData, participantData] = await Promise.all([
+        groupsApi.getGroup(code),
+        groupsApi.getParticipant(code, participantId)
+      ]);
+      setGroup(groupData);
+      setParticipant(participantData);
+      setStatus('success');
+    } catch (error) {
+      setStatus('error');
+      setMessage(error.message ?? 'No pudimos cargar la información.');
+    }
+  };
 
   useEffect(() => {
-    if (initialAccessCode) {
-      loadParticipant(initialAccessCode);
-    } else {
-      setNeedsAccess(true);
-    }
+    loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [code, participantId]);
 
-  useRealtimeGroup(joinCode, () => {
-    loadParticipant();
-  });
-
-  const handleAccessSubmit = (event) => {
-    event.preventDefault();
-    const normalized = accessInput.trim().toUpperCase();
-    if (!normalized) {
-      setAccessFeedback('Escribe el código que recibiste por mensaje.');
-      return;
-    }
-    loadParticipant(normalized);
-  };
-
-  const handleAddWishlistItem = handleSubmit(async (values) => {
-    if (!accessCode) return;
-    setWishlistStatus({ loading: true, message: null });
+  const onAddWishlistItem = async (values) => {
     try {
-      const asin = extractAsin(values.url.trim());
-      const imageUrl = asin ? buildAmazonImageFromAsin(asin) : undefined;
-      const payload = {
-        title: values.title.trim(),
-        url: values.url.trim(),
-        note: values.note.trim(),
-        imageUrl
-      };
-      const wishlist = await addWishlistItem(joinCode, participantId, accessCode, payload);
-      setParticipant((prev) => (prev ? { ...prev, wishlist } : prev));
-      setWishlistStatus({ loading: false, message: 'Agregamos tu deseo a la lista. ✨' });
+      const asin = extractAsin(values.url);
+      const wishlist = await groupsApi.addWishlistItem(code, participantId, {
+        ...values,
+        imageUrl: buildAmazonImageFromAsin(asin)
+      });
+      setParticipant((prev) => ({ ...prev, wishlist }));
       reset();
+      setMessage('Agregamos tu deseo navideño ✨');
     } catch (error) {
-      setWishlistStatus({ loading: false, message: error.message || 'No pudimos guardar el producto.' });
-    }
-  });
-
-  const handleRemoveWishlistItem = async (itemId) => {
-    if (!accessCode) return;
-    setWishlistStatus({ loading: true, message: null });
-    try {
-      const wishlist = await removeWishlistItem(joinCode, participantId, accessCode, itemId);
-      setParticipant((prev) => (prev ? { ...prev, wishlist } : prev));
-      setWishlistStatus({ loading: false, message: 'Elemento eliminado.' });
-    } catch (error) {
-      setWishlistStatus({ loading: false, message: error.message || 'No pudimos quitar el producto.' });
+      setMessage(error.message ?? 'No se pudo agregar el artículo.');
     }
   };
 
-  const handleRevealFriend = async () => {
-    if (!accessCode) return;
-    setFriendStatus({ loading: true, message: null });
+  const onRemoveWishlistItem = async (itemId) => {
     try {
-      const data = await getAssignment(joinCode, participantId, accessCode);
-      setFriendInfo(data.friend);
-      setFriendStatus({ loading: false, message: '¡Recuerda mantener la sorpresa!' });
+      const wishlist = await groupsApi.removeWishlistItem(code, participantId, itemId);
+      setParticipant((prev) => ({ ...prev, wishlist }));
     } catch (error) {
-      setFriendInfo(null);
-      if (error.response?.status === 403) {
-        setFriendStatus({ loading: false, message: 'Aún no está permitido revelar. Pregunta a quien creó el grupo.' });
-      } else if (error.response?.status === 409) {
-        setFriendStatus({ loading: false, message: 'Todavía no se han generado las asignaciones.' });
-      } else {
-        setFriendStatus({ loading: false, message: error.message || 'No pudimos revelar a tu amigo secreto.' });
-      }
+      setMessage(error.message ?? 'No se pudo quitar el artículo');
     }
   };
 
-  const handleCopyPersonalLink = async () => {
-    if (!accessCode) return;
-    const personalUrl = `${window.location.origin}/grupos/${joinCode}/participantes/${participantId}?access=${accessCode}`;
+  const onReveal = async () => {
     try {
-      await navigator.clipboard.writeText(personalUrl);
-      setWishlistStatus({ loading: false, message: 'Enlace personal copiado. Guárdalo en tus notas.' });
+      const result = await groupsApi.getAssignment(code, participantId);
+      setAssignment(result);
+      setMessage('¡Sorpresa revelada! Revisa su lista de deseos para inspirarte.');
     } catch (error) {
-      setWishlistStatus({ loading: false, message: 'Copia manualmente tu enlace: ' + personalUrl });
+      setMessage(error.message ?? 'Aún no puedes ver a tu amigo secreto.');
     }
   };
+
+  if (status === 'pending') {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <Loader label="Cargando tu panel…" />
+      </div>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <EmptyState
+        title="No encontramos tus datos"
+        message={message ?? 'Verifica el enlace o solicita un nuevo acceso al organizador.'}
+        icon="🎁"
+      />
+    );
+  }
+
+  if (!group || !participant) {
+    return null;
+  }
 
   return (
-    <div className="flex flex-col gap-6">
-      {needsAccess ? (
-        <Card
-          title="Ingresa tu código privado"
-          description="Lo recibiste al momento de unirte. Manténlo seguro: con él gestionas tu lista de deseos."
-        >
-          <form className="flex flex-col gap-3" onSubmit={handleAccessSubmit}>
-            <TextField
-              label="Código de acceso"
-              placeholder="XXXXYYYY"
-              value={accessInput}
-              onChange={(event) => setAccessInput(event.target.value.toUpperCase())}
-            />
-            <Button type="submit">Ver mi intercambio</Button>
-            {accessFeedback ? <p className="text-xs text-brand-100">{accessFeedback}</p> : null}
-          </form>
-        </Card>
-      ) : null}
-
-      {isLoading ? <Loader label="Cargando tu información…" /> : null}
-
-      {!isLoading && participant && group ? (
-        <>
-          <Card
-            title={`¡Hola, ${participant.name}!`}
-            description={`Estás participando en ${group.name}. Mantén tu enlace seguro y revisa cuando quieras.`}
-          >
-            <div className="flex flex-col gap-3 text-sm text-white/80">
-              <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 p-3">
-                <div>
-                  <p className="text-xs uppercase tracking-wide text-white/60">Código del grupo</p>
-                  <p className="text-lg font-semibold text-white">{group.joinCode}</p>
-                </div>
-                <Button variant="ghost" onClick={handleCopyPersonalLink} className="text-xs uppercase tracking-wide">
-                  Mi enlace
-                </Button>
+    <div className="grid gap-8 lg:grid-cols-[1.2fr_1fr]">
+      <div className="flex flex-col gap-6">
+        <Card title={`Hola, ${participant.name}`} description={`Grupo ${group.name}`}>
+          <p className="text-sm text-slate-300">
+            Este es tu espacio personal. Agrega ideas de regalo para que tu amigo secreto acierte con algo que ames. Cuando el organizador lo permita, podrás descubrir a quién te toca sorprender.
+          </p>
+          <div className="rounded-xl bg-black/30 p-4 text-sm text-slate-200">
+            <div className="flex flex-col gap-2">
+              <span className="text-xs uppercase tracking-widest text-brand-200">Estado del grupo</span>
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="text-base font-semibold text-white">
+                  {group.assignmentsGenerated ? 'Emparejamientos listos' : 'Esperando al organizador'}
+                </span>
+                <span className="rounded-full bg-white/10 px-3 py-1 text-xs">
+                  {group.allowReveal ? 'Revelación activa' : 'Revelación bloqueada'}
+                </span>
               </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="rounded-2xl bg-white/5 p-3">
-                  <p className="text-xs uppercase tracking-wide text-white/60">Emparejamiento listo</p>
-                  <p className="text-lg font-semibold text-white">{group.assignmentsGenerated ? 'Sí' : 'Aún no'}</p>
-                </div>
-                <div className="rounded-2xl bg-white/5 p-3">
-                  <p className="text-xs uppercase tracking-wide text-white/60">Revelaciones activas</p>
-                  <p className="text-lg font-semibold text-white">{group.allowReveal ? 'Sí' : 'Aún no'}</p>
-                </div>
-              </div>
-              <p className="text-xs text-white/70">Las actualizaciones se reflejan automáticamente cuando alguien modifica su lista.</p>
             </div>
-          </Card>
-
-          <Card title="Tu lista de deseos" description="Agrega productos que te entusiasme recibir. Usa enlaces de Amazon para mostrar una imagen.">
-            <form className="flex flex-col gap-3" onSubmit={handleAddWishlistItem}>
-              <TextField
-                label="Nombre del producto"
-                placeholder="Set de tazas navideñas"
-                {...register('title', { required: 'Ingresa un título' })}
-                error={errors.title?.message}
-              />
-              <TextField
-                label="Enlace"
-                placeholder="https://www.amazon.com/..."
-                type="url"
-                {...register('url', { required: 'Comparte un enlace para encontrar el regalo' })}
-                error={errors.url?.message}
-              />
-              <TextField
-                label="Notas (opcional)"
-                placeholder="Color verde oscuro, por favor"
-                {...register('note')}
-              />
-              <div className="flex flex-col gap-2">
-                <Button type="submit" disabled={wishlistStatus.loading}>
-                  {wishlistStatus.loading ? <Loader label="Guardando…" /> : 'Agregar a mi lista'}
-                </Button>
-                {wishlistStatus.message ? <p className="text-xs text-brand-100">{wishlistStatus.message}</p> : null}
-              </div>
-            </form>
-
-            <div className="mt-4 flex flex-col gap-3">
-              {participant.wishlist.length ? (
-                participant.wishlist.map((item) => (
-                  <WishlistItem key={item.id} item={item} onRemove={handleRemoveWishlistItem} />
-                ))
-              ) : (
-                <EmptyState
-                  icon="🎁"
-                  title="Tu lista está vacía"
-                  message="Agrega un par de ideas para que tu amigo secreto acierte." 
-                />
-              )}
-            </div>
-          </Card>
-
-          <Card title="Tu amigo secreto" description="Solo tú podrás ver esta información cuando el anfitrión habilite la revelación.">
-            <div className="flex flex-col gap-3">
-              <Button onClick={handleRevealFriend} disabled={friendStatus.loading}>
-                {friendStatus.loading ? <Loader label="Buscando…" /> : 'Revelar a quién regalo'}
-              </Button>
-              {friendStatus.message ? <p className="text-xs text-brand-100">{friendStatus.message}</p> : null}
-              {friendInfo ? (
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
-                  <h3 className="text-base font-semibold text-white">{friendInfo.name}</h3>
-                  {friendInfo.wishlist.length ? (
-                    <ul className="mt-3 list-disc space-y-2 pl-5 text-sm text-white/80">
-                      {friendInfo.wishlist.map((item) => (
-                        <li key={item.id}>
-                          <a
-                            href={item.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="font-semibold text-brand-100 hover:text-brand-50"
-                          >
-                            {item.title}
-                          </a>
-                          {item.note ? <span className="ml-2 text-white/60">— {item.note}</span> : null}
+            <Button
+              className="mt-4 w-full sm:w-auto"
+              onClick={onReveal}
+              disabled={!group.assignmentsGenerated || !group.allowReveal}
+            >
+              Ver a quién debo regalar
+            </Button>
+            {assignment ? (
+              <div className="mt-4 space-y-2 rounded-lg border border-brand-400/30 bg-brand-500/10 p-4">
+                <p className="text-sm text-brand-100">Te tocó sorprender a:</p>
+                <p className="text-xl font-semibold text-white">{assignment.name}</p>
+                {assignment.email ? <p className="text-sm text-slate-200">{assignment.email}</p> : null}
+                {assignment.wishlist?.length ? (
+                  <div className="mt-3 space-y-2">
+                    <p className="text-xs uppercase tracking-widest text-brand-200">Sus deseos</p>
+                    <ul className="grid gap-3">
+                      {assignment.wishlist.map((item) => (
+                        <li key={item._id}>
+                          <WishlistItem item={item} />
                         </li>
                       ))}
                     </ul>
-                  ) : (
-                    <p className="mt-3 text-sm text-white/70">Tu amigo secreto aún no tiene deseos registrados.</p>
-                  )}
-                </div>
-              ) : null}
-            </div>
-          </Card>
-
-          <Card
-            title="Listas del grupo"
-            description="Consulta las ideas de los demás para inspirarte. Solo puedes verlas, no modificarlas."
-          >
-            {peers.length ? (
-              <div className="flex flex-col gap-4">
-                {peers.map((peer) => (
-                  <div key={peer.id} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
-                    <h3 className="text-base font-semibold text-white">{peer.name}</h3>
-                    {peer.wishlist.length ? (
-                      <ul className="list-disc space-y-2 pl-5 text-sm text-white/80">
-                        {peer.wishlist.map((item) => (
-                          <li key={item.id}>
-                            <a
-                              href={item.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="font-semibold text-brand-100 hover:text-brand-50"
-                            >
-                              {item.title}
-                            </a>
-                            {item.note ? <span className="ml-2 text-white/60">— {item.note}</span> : null}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-sm text-white/60">Aún no agregó deseos.</p>
-                    )}
                   </div>
-                ))}
+                ) : (
+                  <p className="text-xs text-slate-400">Aún no tiene deseos publicados, pregúntale por pistas 👀</p>
+                )}
               </div>
-            ) : (
-              <EmptyState
-                icon="🌟"
-                title="Aún no hay deseos publicados"
-                message="Cuando tus compañeros agreguen productos los verás aquí."
-              />
-            )}
-          </Card>
-        </>
-      ) : null}
+            ) : null}
+          </div>
+          {message ? <p className="text-xs text-brand-200">{message}</p> : null}
+        </Card>
+        <Card title="Tu lista de deseos" description="Añade productos de Amazon que te encantaría recibir.">
+          {participant.wishlist?.length ? (
+            <ul className="grid gap-3">
+              {participant.wishlist.map((item) => (
+                <li key={item._id}>
+                  <WishlistItem item={item} onRemove={onRemoveWishlistItem} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState title="Sin deseos" message="Comparte algunos enlaces para inspirar a tu amigo secreto." icon="✨" />
+          )}
+        </Card>
+      </div>
+      <div className="flex flex-col gap-6">
+        <Card title="Agregar un producto">
+          <form className="flex flex-col gap-4" onSubmit={handleSubmit(onAddWishlistItem)}>
+            <TextField
+              label="Nombre del producto"
+              placeholder="Set de tazas navideñas"
+              error={errors.title?.message}
+              {...register('title', {
+                required: 'Describe el producto',
+                minLength: { value: 3, message: 'Muy corto' }
+              })}
+            />
+            <TextField
+              label="Enlace de Amazon"
+              placeholder="https://www.amazon.com/dp/..."
+              error={errors.url?.message}
+              {...register('url', {
+                required: 'Agrega el enlace del producto',
+                pattern: { value: /^https?:\/\//i, message: 'Incluye el protocolo https://' }
+              })}
+            />
+            <TextField
+              label="Notas (opcional)"
+              placeholder="Talla M, color verde"
+              error={errors.note?.message}
+              {...register('note', { maxLength: { value: 120, message: 'Máximo 120 caracteres' } })}
+            />
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? <Loader label="Guardando…" /> : 'Agregar a mi lista'}
+            </Button>
+          </form>
+          <p className="mt-4 text-xs text-slate-400">
+            Tip: copia el enlace directo del producto en Amazon. Detectamos el ASIN automáticamente para mostrar una vista previa.
+          </p>
+        </Card>
+        <Card title="Volver al panel del grupo">
+          <Button variant="secondary" onClick={() => navigate(`/grupos/${code}`)}>
+            Ver participantes
+          </Button>
+        </Card>
+      </div>
     </div>
   );
 };

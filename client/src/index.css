@@ -7,12 +7,12 @@
 }
 
 body {
-  @apply min-h-screen bg-pine-950 text-white font-sans;
+  @apply bg-slate-950 text-slate-100 font-sans;
 }
 
 button:focus-visible,
 input:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid theme('colors.brand.400');
+  outline: 2px solid theme('colors.brand.500');
   outline-offset: 2px;
 }

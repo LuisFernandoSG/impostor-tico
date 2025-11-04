@@ -1,294 +1,214 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Card } from '../components/Card.jsx';
-import { TextField } from '../components/TextField.jsx';
+import { useEffect, useMemo, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Button } from '../components/Button.jsx';
-import { Loader } from '../components/Loader.jsx';
+import { Card } from '../components/Card.jsx';
 import { EmptyState } from '../components/EmptyState.jsx';
+import { Loader } from '../components/Loader.jsx';
+import { TextField } from '../components/TextField.jsx';
 import { useGroupsApi } from '../services/groups.js';
-import { useRealtimeGroup } from '../hooks/useRealtimeGroup.js';
-import { getAdminCode, getParticipantAccess, rememberAdminCode } from '../utils/storage.js';
 
-const formatBool = (value) => (value ? 'Sí' : 'No todavía');
+const formatDate = (date) => new Date(date).toLocaleString('es-ES', { dateStyle: 'medium', timeStyle: 'short' });
 
 export const GroupHostPage = () => {
-  const { code = '' } = useParams();
-  const joinCode = code.toUpperCase();
-  const location = useLocation();
+  const { code } = useParams();
   const navigate = useNavigate();
-
-  const locationAdminCode = location.state?.adminCode;
-  const storedAdminCode = useMemo(() => getAdminCode(joinCode), [joinCode]);
-  const initialAdminCode = locationAdminCode || storedAdminCode || '';
-
-  const { getGroup, generateAssignments, updateSettings } = useGroupsApi();
-
-  const [adminCode, setAdminCode] = useState(initialAdminCode);
-  const [adminCodeInput, setAdminCodeInput] = useState(initialAdminCode);
-  const [needsAdminCode, setNeedsAdminCode] = useState(!initialAdminCode);
-  const [adminFeedback, setAdminFeedback] = useState(null);
-
+  const groupsApi = useGroupsApi();
   const [group, setGroup] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [actionLoading, setActionLoading] = useState(null);
+  const [status, setStatus] = useState('idle');
+  const [error, setError] = useState(null);
   const [actionMessage, setActionMessage] = useState(null);
 
-  const loadGroup = useCallback(
-    async (codeToUse) => {
-      const adminToUse = (codeToUse || adminCode || '').toUpperCase();
-      if (!adminToUse) return;
-      setIsLoading(true);
-      setAdminFeedback(null);
-      try {
-        const data = await getGroup(joinCode, adminToUse);
-        setGroup(data);
-        rememberAdminCode(joinCode, adminToUse);
-        setNeedsAdminCode(false);
-        setAdminCode(adminToUse);
-        setAdminCodeInput(adminToUse);
-      } catch (error) {
-        if (error.response?.status === 404) {
-          navigate('/404', { replace: true });
-          return;
-        }
-        if (error.response?.status === 403) {
-          setNeedsAdminCode(true);
-          setAdminFeedback('El código de administración no es válido. Intenta nuevamente.');
-          setAdminCode('');
-          setGroup(null);
-        } else {
-          setAdminFeedback(error.message || 'No pudimos cargar la información del grupo.');
-        }
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [adminCode, getGroup, joinCode, navigate]
-  );
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors, isSubmitting }
+  } = useForm({ defaultValues: { name: '', email: '' } });
+
+  const loadGroup = async () => {
+    setStatus('pending');
+    setError(null);
+    setActionMessage(null);
+    try {
+      const result = await groupsApi.getGroup(code);
+      setGroup(result);
+      setStatus('success');
+    } catch (err) {
+      setError(err.message ?? 'No se pudo cargar el grupo');
+      setStatus('error');
+    }
+  };
 
   useEffect(() => {
-    if (initialAdminCode) {
-      loadGroup(initialAdminCode);
-    } else {
-      setNeedsAdminCode(true);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useRealtimeGroup(joinCode, () => {
     loadGroup();
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [code]);
 
-  const handleAdminSubmit = (event) => {
-    event.preventDefault();
-    const normalized = adminCodeInput.trim().toUpperCase();
-    if (!normalized) {
-      setAdminFeedback('Ingresa el código que recibiste al crear el grupo.');
-      return;
-    }
-    loadGroup(normalized);
-  };
+  const participants = useMemo(() => group?.participants ?? [], [group]);
 
-  const handleCopyJoinCode = async () => {
+  const onAddParticipant = async (values) => {
     try {
-      await navigator.clipboard.writeText(joinCode);
-      setActionMessage('Código copiado. ¡Compártelo con tus invitados!');
-    } catch (error) {
-      setActionMessage('No pudimos copiar el código. Copia manualmente: ' + joinCode);
+      const participant = await groupsApi.addParticipant(code, values);
+      setGroup((prev) => ({ ...prev, participants: [...(prev?.participants ?? []), participant] }));
+      reset();
+      setActionMessage(`${participant.name} se unió al intercambio ✨`);
+    } catch (err) {
+      setActionMessage(err.message ?? 'No se pudo agregar a la persona');
     }
   };
 
-  const handleGenerateAssignments = async () => {
-    if (!adminCode) return;
-    setActionLoading('assignments');
-    setActionMessage(null);
+  const onGenerateAssignments = async () => {
     try {
-      await generateAssignments(joinCode, adminCode);
-      setActionMessage('Asignaciones generadas. Avisa cuando quieras revelar.');
+      await groupsApi.generateAssignments(code);
       await loadGroup();
-    } catch (error) {
-      setActionMessage(error.message || 'No pudimos generar las asignaciones.');
-    } finally {
-      setActionLoading(null);
+      setActionMessage('Asignaciones generadas. Habilita la revelación cuando quieras.');
+    } catch (err) {
+      setActionMessage(err.message ?? 'No se pudieron generar las asignaciones');
     }
   };
 
-  const handleToggleReveal = async () => {
-    if (!adminCode || !group) return;
-    setActionLoading('reveal');
-    setActionMessage(null);
+  const onToggleReveal = async () => {
     try {
-      const next = !group.allowReveal;
-      await updateSettings(joinCode, adminCode, { allowReveal: next });
-      setActionMessage(
-        next ? 'Revelaciones habilitadas. Todos podrán ver a quién regalan.' : 'Las revelaciones se desactivaron.'
-      );
-      await loadGroup();
-    } catch (error) {
-      setActionMessage(error.message || 'No pudimos actualizar las revelaciones.');
-    } finally {
-      setActionLoading(null);
+      const nextValue = !group?.allowReveal;
+      await groupsApi.updateSettings(code, { allowReveal: nextValue });
+      setGroup((prev) => ({ ...prev, allowReveal: nextValue }));
+      setActionMessage(nextValue ? 'Los participantes ya pueden ver a quién regalar 🎁' : 'La revelación se ha deshabilitado');
+    } catch (err) {
+      setActionMessage(err.message ?? 'No se pudo actualizar la configuración');
     }
   };
 
-  const hostParticipantLink = useMemo(() => {
-    if (!group?.ownerParticipantId) return null;
-    const accessCode = getParticipantAccess(group.ownerParticipantId);
-    if (!accessCode) return null;
-    return {
-      url: `/grupos/${joinCode}/participantes/${group.ownerParticipantId}`,
-      accessCode
-    };
-  }, [group, joinCode]);
+  if (status === 'pending') {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <Loader label="Cargando grupo…" />
+      </div>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <EmptyState
+        title="Ups, no encontramos el grupo"
+        message={error ?? 'Verifica el código e inténtalo de nuevo.'}
+        icon="🎄"
+      />
+    );
+  }
+
+  if (!group) {
+    return null;
+  }
 
   return (
-    <div className="flex flex-col gap-6">
-      {needsAdminCode ? (
-        <Card
-          title="Ingresa tu código de administrador"
-          description="Este código se generó cuando creaste el grupo. Permite controlar revelaciones y ver el tablero en vivo."
-        >
-          <form className="flex flex-col gap-3" onSubmit={handleAdminSubmit}>
+    <div className="grid gap-8 lg:grid-cols-[1.4fr_1fr]">
+      <div className="flex flex-col gap-6">
+        <Card title={group.name} description={`Código: ${group.joinCode}`}>
+          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
+            <span>
+              Creado por <strong>{group.ownerName}</strong>
+            </span>
+            {group.ownerEmail ? <span>📧 {group.ownerEmail}</span> : null}
+            <span>Actualizado {formatDate(group.updatedAt ?? new Date())}</span>
+          </div>
+          <div className="grid gap-3 rounded-xl bg-black/30 p-4 text-sm text-slate-200">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-base font-semibold text-white">Estado del sorteo</span>
+              <span className="text-sm uppercase tracking-widest text-brand-200">
+                {group.assignmentsGenerated ? 'Generado' : 'Pendiente'}
+              </span>
+            </div>
+            <p className="text-sm text-slate-300">
+              {group.assignmentsGenerated
+                ? 'Los emparejamientos están listos. Puedes habilitar la revelación cuando quieras que cada persona descubra a su destinatario.'
+                : 'Agrega a todas las personas antes de generar los emparejamientos para garantizar un sorteo justo.'}
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <Button onClick={onGenerateAssignments} disabled={participants.length < 2}>
+                Generar emparejamientos
+              </Button>
+              <Button variant="secondary" onClick={onToggleReveal} disabled={!group.assignmentsGenerated}>
+                {group.allowReveal ? 'Deshabilitar revelación' : 'Habilitar revelación'}
+              </Button>
+              <Button variant="ghost" onClick={() => navigate('/')}>Crear otro grupo</Button>
+            </div>
+            {actionMessage ? <p className="text-xs text-brand-200">{actionMessage}</p> : null}
+          </div>
+        </Card>
+        <Card title="Personas participantes" description="Comparte el código para que cada quien se registre con sus datos.">
+          {participants.length === 0 ? (
+            <EmptyState title="Aún no hay participantes" message="Invita a tus amigos y familiares para comenzar." icon="🧑‍🤝‍🧑" />
+          ) : (
+            <ul className="grid gap-3">
+              {participants.map((participant) => (
+                <li
+                  key={participant._id}
+                  className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-white/10 bg-white/5 p-4 text-sm"
+                >
+                  <div>
+                    <p className="text-lg font-semibold text-white">{participant.name}</p>
+                    <p className="text-sm text-slate-300">{participant.email ?? 'Sin correo'}</p>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                    <Button
+                      variant="ghost"
+                      className="text-xs"
+                      onClick={() =>
+                        navigate(`/grupos/${code}/participantes/${participant._id}`, {
+                          state: { participant }
+                        })
+                      }
+                    >
+                      Ver panel individual
+                    </Button>
+                    {participant.wishlist?.length ? (
+                      <span className="rounded-full bg-brand-500/20 px-3 py-1 text-brand-100">
+                        {participant.wishlist.length} deseos
+                      </span>
+                    ) : null}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      </div>
+      <div className="flex flex-col gap-6">
+        <Card title="Agregar participante manualmente">
+          <form className="flex flex-col gap-4" onSubmit={handleSubmit(onAddParticipant)}>
             <TextField
-              label="Código de administrador"
-              placeholder="XXXXYYYYZZZZ"
-              value={adminCodeInput}
-              onChange={(event) => setAdminCodeInput(event.target.value.toUpperCase())}
+              label="Nombre"
+              placeholder="Laura"
+              error={errors.name?.message}
+              {...register('name', { required: 'Ingresa un nombre', minLength: { value: 2, message: 'Demasiado corto' } })}
             />
-            <Button type="submit">Ver mi grupo</Button>
-            {adminFeedback ? <p className="text-xs text-brand-100">{adminFeedback}</p> : null}
+            <TextField
+              label="Correo (opcional)"
+              placeholder="correo@ejemplo.com"
+              type="email"
+              error={errors.email?.message}
+              {...register('email', {
+                pattern: { value: /\S+@\S+\.\S+/, message: 'Formato inválido' }
+              })}
+            />
+            <Button type="submit" disabled={isSubmitting}>
+              {isSubmitting ? <Loader label="Agregando…" /> : 'Agregar'}
+            </Button>
           </form>
         </Card>
-      ) : null}
-
-      {isLoading ? <Loader label="Actualizando datos del grupo…" /> : null}
-
-      {!isLoading && group ? (
-        <>
-          <Card
-            title={group.name}
-            description="Comparte el código con tus amigos y controla todo desde aquí. Las actualizaciones aparecen en tiempo real."
-          >
-            <div className="flex flex-col gap-3 text-sm text-white/80">
-              <div className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/5 p-3">
-                <div>
-                  <p className="text-xs uppercase tracking-wide text-white/60">Código del grupo</p>
-                  <p className="text-lg font-semibold text-white">{group.joinCode}</p>
-                </div>
-                <Button variant="ghost" onClick={handleCopyJoinCode} className="text-xs uppercase tracking-wide">
-                  Copiar
-                </Button>
-              </div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="rounded-2xl bg-white/5 p-3">
-                  <p className="text-xs uppercase tracking-wide text-white/60">Participantes</p>
-                  <p className="text-lg font-semibold text-white">{group.participants.length}</p>
-                </div>
-                <div className="rounded-2xl bg-white/5 p-3">
-                  <p className="text-xs uppercase tracking-wide text-white/60">Asignaciones listas</p>
-                  <p className="text-lg font-semibold text-white">{formatBool(group.assignmentsGenerated)}</p>
-                </div>
-                <div className="rounded-2xl bg-white/5 p-3">
-                  <p className="text-xs uppercase tracking-wide text-white/60">Revelaciones abiertas</p>
-                  <p className="text-lg font-semibold text-white">{formatBool(group.allowReveal)}</p>
-                </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                <Button onClick={handleGenerateAssignments} disabled={actionLoading === 'assignments'}>
-                  {actionLoading === 'assignments' ? <Loader label="Mezclando participantes…" /> : 'Generar emparejamientos'}
-                </Button>
-                <Button
-                  onClick={handleToggleReveal}
-                  disabled={!group.assignmentsGenerated || actionLoading === 'reveal'}
-                  variant="secondary"
-                >
-                  {actionLoading === 'reveal'
-                    ? <Loader label="Actualizando revelaciones…" />
-                    : group.allowReveal
-                    ? 'Ocultar revelaciones'
-                    : 'Permitir revelar amigos secretos'}
-                </Button>
-                {actionMessage ? <p className="text-xs text-brand-100">{actionMessage}</p> : null}
-              </div>
-            </div>
-          </Card>
-
-          {hostParticipantLink ? (
-            <Card
-              title="Tu enlace personal"
-              description="Desde aquí gestionas tu lista de deseos como un participante más. Guarda el enlace para regresar."
-            >
-              <div className="flex flex-col gap-3 text-sm text-white/80">
-                <p>
-                  Accede a <span className="font-semibold">tu panel de deseos</span>:
-                </p>
-                <Button as="a" href={`${hostParticipantLink.url}?access=${hostParticipantLink.accessCode}`} target="_self">
-                  Ir a mi lista
-                </Button>
-                <p className="text-[11px] text-white/70">El enlace incluye tu código privado de acceso.</p>
-              </div>
-            </Card>
-          ) : null}
-
-          <Card
-            title="Participantes"
-            description="Visualiza las listas de deseos para ayudar a coordinar los regalos."
-          >
-            {group.participants.length ? (
-              <div className="flex flex-col gap-4">
-                {group.participants.map((participant) => (
-                  <div
-                    key={participant.id}
-                    className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4"
-                  >
-                    <div className="flex flex-col gap-1">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <p className="text-base font-semibold text-white">
-                            {participant.name}
-                            {participant.isOwner ? ' · Anfitrión' : ''}
-                          </p>
-                          {participant.email ? (
-                            <p className="text-sm text-white/70">{participant.email}</p>
-                          ) : null}
-                        </div>
-                        <span className="text-xs uppercase tracking-wide text-white/60">
-                          {participant.wishlistCount} deseos
-                        </span>
-                      </div>
-                    </div>
-                    {participant.wishlist.length ? (
-                      <ul className="list-disc space-y-2 pl-5 text-sm text-white/80">
-                        {participant.wishlist.map((item) => (
-                          <li key={item.id}>
-                            <a
-                              href={item.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="font-semibold text-brand-100 hover:text-brand-50"
-                            >
-                              {item.title}
-                            </a>
-                            {item.note ? <span className="ml-2 text-white/60">— {item.note}</span> : null}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <p className="text-sm text-white/60">Aún no agrega deseos.</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                icon="🎄"
-                title="Sin participantes todavía"
-                message="Comparte el código del grupo para que tus amigos se registren."
-              />
-            )}
-          </Card>
-        </>
-      ) : null}
+        <Card title="Comparte el código">
+          <div className="flex flex-col gap-3 text-sm text-slate-300">
+            <p>Comparte este enlace para que puedan unirse directamente:</p>
+            <code className="break-all rounded-xl bg-black/40 p-3 text-brand-100">
+              {`${typeof window !== 'undefined' ? window.location.origin : 'https://tu-dominio.com'}/grupos/${group.joinCode}`}
+            </code>
+            <p className="text-xs text-slate-500">
+              Tip: incluye este enlace en tu grupo de WhatsApp o correo para que nadie se quede fuera.
+            </p>
+          </div>
+        </Card>
+      </div>
     </div>
   );
 };

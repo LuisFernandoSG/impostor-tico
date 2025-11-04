@@ -5,18 +5,23 @@ import { ParticipantPage } from './pages/ParticipantPage.jsx';
 import { NotFoundPage } from './pages/NotFoundPage.jsx';
 
 const Layout = ({ children }) => (
-  <div className="min-h-screen bg-gradient-to-b from-pine-950 via-brand-900/40 to-pine-950 text-white">
-    <div className="mx-auto flex min-h-screen w-full max-w-3xl flex-col px-4 py-6 sm:px-6">
-      <header className="flex flex-col items-center gap-2 pb-6 text-center">
-        <span className="text-xs uppercase tracking-[0.35em] text-white/70">Amigo secreto</span>
-        <h1 className="text-3xl font-bold leading-tight sm:text-4xl">Navidad entre amigos</h1>
-        <p className="text-sm text-white/75">Organiza, comparte deseos y mantén la sorpresa desde tu celular.</p>
-      </header>
-      <main className="flex flex-1 flex-col gap-6 pb-10">{children}</main>
-      <footer className="pt-6 text-center text-xs text-white/60">
-        Hecho con cariño navideño 🎄
-      </footer>
-    </div>
+  <div className="flex min-h-screen flex-col bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white">
+    <header className="border-b border-white/5 bg-slate-950/80">
+      <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-6 py-4">
+        <div className="flex flex-col">
+          <span className="text-sm uppercase tracking-widest text-brand-300">Navidad entre Amigos</span>
+          <h1 className="text-xl font-bold">Intercambios mágicos sin complicaciones</h1>
+        </div>
+        <img src="https://em-content.zobj.net/source/telegram/358/christmas-tree_1f384.png" alt="Arbolito" className="h-12 w-12" />
+      </div>
+    </header>
+    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 px-6 py-10">{children}</main>
+    <footer className="border-t border-white/5 bg-slate-950/60">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-6 py-6 text-sm text-slate-400 sm:flex-row sm:items-center sm:justify-between">
+        <span>Construido con React + Tailwind + MongoDB</span>
+        <span>Comparte la magia 🎁</span>
+      </div>
+    </footer>
   </div>
 );
 
