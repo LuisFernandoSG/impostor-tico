@@ -177,7 +177,7 @@ export const ParticipantPage = () => {
     try {
       const asin = extractAsin(values.url.trim());
       console.log('ASIN', asin);  
-      // const imageUrl = asin ? buildAmazonImageFromAsin(asin) : undefined;
+      const imageUrl = asin ? buildAmazonImageFromAsin(asin) : undefined;
       const payload = {
         title: values.title.trim(),
         url: values.url.trim(),
