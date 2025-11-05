@@ -10,16 +10,18 @@ import { initRealtime } from './services/realtime.js';
 const app = express();
 const server = http.createServer(app);
 
-const corsOrigins = CLIENT_ORIGIN === '*' ? '*' : CLIENT_ORIGIN.split(',').map((origin) => origin.trim());
+const corsOrigins =
+  CLIENT_ORIGIN === '*'
+    ? '*'
+    : CLIENT_ORIGIN.split(',').map((origin) => origin.trim());
+
 const corsOptions =
   corsOrigins === '*'
-    ? { origin: '*' }
-    : {
-        origin: corsOrigins,
-        credentials: true
-      };
+    ? { origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], credentials: true }
+    : { origin: corsOrigins, methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], credentials: true };
 
 app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // ✅ manejo preflight global
 app.use(express.json());
 app.use(morgan('dev'));
 
