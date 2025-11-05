@@ -362,10 +362,6 @@ router.delete(
     try {
       const item = req.participant.wishlist.id(req.params.itemId);
 
-      console.log('***********************************************');
-      console.log(item?._id);
-      console.log('***********************************************');
-
       if (!item) {
         return res.status(404).json({ message: 'Producto no encontrado' });
       }
